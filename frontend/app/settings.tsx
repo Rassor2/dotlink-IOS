@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, Switch, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, Switch, ScrollView, TouchableOpacity } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -8,9 +8,11 @@ import { TopBar } from '@/src/components/TopBar';
 import { colors, spacing, radii } from '@/src/theme';
 import { useProfile } from '@/src/state/profile';
 import { hapticTap, setAudioPrefs } from '@/src/audio/feedback';
+import { useRouter } from 'expo-router';
 
 export default function Settings() {
   const { profile, updateSettings } = useProfile();
+  const router = useRouter();
   const s = profile?.settings || { sound: true, music: true, haptics: true };
 
   const toggle = (key: 'sound' | 'music' | 'haptics') => async (next: boolean) => {
@@ -52,6 +54,22 @@ export default function Settings() {
           value={s.haptics}
           onChange={toggle('haptics')}
         />
+
+        <TouchableOpacity
+          testID="settings-replay-tutorial"
+          style={styles.tutBtn}
+          onPress={() => { hapticTap(); router.push('/tutorial'); }}
+          activeOpacity={0.85}
+        >
+          <View style={styles.rowIcon}>
+            <Ionicons name="book-outline" size={18} color={colors.brand} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.rowTitle}>Revoir le tutoriel</Text>
+            <Text style={styles.rowDesc}>Suis à nouveau l&apos;intro avec Vega</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={colors.onSurfaceTertiary} />
+        </TouchableOpacity>
         <View style={styles.about}>
           <Text style={styles.aboutTitle}>Dot Link</Text>
           <Text style={styles.aboutBody}>
@@ -107,6 +125,15 @@ const styles = StyleSheet.create({
   },
   rowTitle: { color: colors.onSurface, fontSize: 15, fontWeight: '600' },
   rowDesc: { color: colors.onSurfaceTertiary, fontSize: 11, marginTop: 2 },
+
+  tutBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+    padding: spacing.md,
+    backgroundColor: 'rgba(245,200,81,0.06)',
+    borderRadius: radii.md,
+    borderWidth: 1, borderColor: 'rgba(245,200,81,0.30)',
+    marginTop: spacing.xs,
+  },
 
   about: {
     marginTop: spacing.xl,

@@ -17,7 +17,7 @@ import Animated, {
 
 import { colors, spacing, radii, typography } from '@/src/theme';
 import { useProfile } from '@/src/state/profile';
-import { hapticTap, setAudioPrefs } from '@/src/audio/feedback';
+import { hapticTap, setAudioPrefs, setMusicPlaying } from '@/src/audio/feedback';
 
 const BG = 'https://images.pexels.com/photos/33441868/pexels-photo-33441868.jpeg';
 const { width } = Dimensions.get('window');
@@ -76,8 +76,13 @@ export default function Home() {
         music: profile.settings.music,
         haptics: profile.settings.haptics,
       });
+      if (profile.settings.music) setMusicPlaying(true);
+      // Force tutorial on first run
+      if (profile.tutorial_done === false) {
+        router.replace('/tutorial');
+      }
     }
-  }, [profile]);
+  }, [profile, router]);
 
   const titleScale = useSharedValue(0.92);
   useEffect(() => {
@@ -101,10 +106,8 @@ export default function Home() {
         />
       </ImageBackground>
 
-      {/* Ambient dots */}
+      {/* Ambient dots (battery-friendly: 3 layers instead of 5) */}
       <PulsingDot x={width * 0.18} y={140} size={5} color="#98FF98" delay={0} />
-      <PulsingDot x={width * 0.82} y={200} size={4} color="#FFC107" delay={500} />
-      <PulsingDot x={width * 0.32} y={300} size={3} color="#FF7F50" delay={900} />
       <PulsingDot x={width * 0.72} y={360} size={5} color="#E91E63" delay={1300} />
       <PulsingDot x={width * 0.10} y={420} size={3} color="#F5C851" delay={1700} />
 
@@ -161,9 +164,13 @@ export default function Home() {
               <Ionicons name="diamond-outline" size={18} color={colors.brand} />
               <Text style={styles.secondaryLabel}>Boutique</Text>
             </TouchableOpacity>
-            <TouchableOpacity testID="profile-cta" style={styles.secondaryBtn} onPress={() => { hapticTap(); router.push('/profile'); }}>
+            <TouchableOpacity testID="leaderboard-cta" style={styles.secondaryBtn} onPress={() => { hapticTap(); router.push('/leaderboard'); }}>
               <Ionicons name="trophy-outline" size={18} color={colors.brand} />
-              <Text style={styles.secondaryLabel}>Statistiques</Text>
+              <Text style={styles.secondaryLabel}>Classement</Text>
+            </TouchableOpacity>
+            <TouchableOpacity testID="profile-cta" style={styles.secondaryBtn} onPress={() => { hapticTap(); router.push('/profile'); }}>
+              <Ionicons name="person-outline" size={18} color={colors.brand} />
+              <Text style={styles.secondaryLabel}>Profil</Text>
             </TouchableOpacity>
           </View>
         </View>

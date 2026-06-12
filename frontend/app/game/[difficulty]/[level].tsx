@@ -40,9 +40,27 @@ import {
   hapticError,
   play,
 } from '@/src/audio/feedback';
+import { showRewardedAd } from '@/src/ads/admob';
+import { resolveBoardSkin, resolveBallSkin } from '@/src/skins/catalog';
+import { BoardMotif } from '@/src/skins/visuals';
 
-const HINT_COST = 25;
+const HINT_COST = 40;
 const SCREEN_W = Dimensions.get('window').width;
+
+// Per-world reward multiplier × star count
+// 1⭐ = 2 base, 2⭐ = 5 base, 3⭐ = 10 base
+// Multipliers: lumina 0.5, aurora 1, zenith 1.5, eclipse 2, void 3
+//   ⇒ 3⭐ Lumina 5, Aurora 10, Zenith 15, Eclipse 20, Void 30
+const STAR_BASE: Record<number, number> = { 1: 2, 2: 5, 3: 10 };
+const WORLD_MULT: Record<string, number> = {
+  lumina: 0.5, aurora: 1, zenith: 1.5, eclipse: 2, void: 3,
+};
+function coinReward(difficulty: string, stars: number): number {
+  if (stars <= 0) return 0;
+  const base = STAR_BASE[stars] || 0;
+  const mult = WORLD_MULT[difficulty] ?? 1;
+  return Math.max(1, Math.round(base * mult));
+}
 
 export default function GameScreen() {
   const params = useLocalSearchParams<{ difficulty: string; level: string }>();
@@ -53,6 +71,9 @@ export default function GameScreen() {
   const { profile, addCoins, spendCoins, markLevel } = useProfile();
 
   const theme = WORLD_THEMES[difficulty] || WORLD_THEMES.lumina;
+
+  const boardSkin = resolveBoardSkin(profile?.active_skins?.board);
+  const ballSkin = resolveBallSkin(profile?.active_skins?.ball);
 
   const [levelData, setLevelData] = useState<LevelData | null>(null);
   const [state, setState] = useState<GameState | null>(null);
@@ -176,8 +197,9 @@ export default function GameScreen() {
     if (completed && levelData) {
       const time_ms = Date.now() - startTimeRef.current;
       markLevel(levelData.id, { stars, moves, time_ms });
-      // Bonus coins: 10 * stars
-      if (stars > 0) addCoins(10 * stars);
+      // World-scaled reward
+      const reward = coinReward(difficulty, stars);
+      if (reward > 0) addCoins(reward);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [completed]);
@@ -220,21 +242,19 @@ export default function GameScreen() {
 
   const onReward = async () => {
     setShowAd(true);
-    // mock 2-second 'ad'
-    setTimeout(async () => {
-      try {
-        if (profile) {
-          const res = await api.reward(profile.device_id, 50);
-          await addCoins(0); // trigger profile re-pull via refresh? sync next time
-        }
-        await addCoins(50); // local immediate
+    try {
+      const result = await showRewardedAd();
+      if (result.rewarded) {
+        try {
+          if (profile) await api.reward(profile.device_id, 50);
+        } catch {}
+        await addCoins(50);
         play('coin');
         hapticSuccess();
-      } catch {
-        await addCoins(50);
       }
+    } finally {
       setShowAd(false);
-    }, 2200);
+    }
   };
 
   if (loading || !state || !levelData) {
@@ -288,9 +308,14 @@ export default function GameScreen() {
         </View>
         <GestureDetector gesture={panGesture}>
           <View
-            style={[styles.grid, { width: gridSize, height: gridSize }]}
+            style={[styles.grid, {
+              width: gridSize, height: gridSize,
+              backgroundColor: boardSkin.bg,
+              shadowColor: boardSkin.accent,
+            }]}
             testID="game-grid"
           >
+            <BoardMotif skinId={boardSkin.id} size={gridSize} />
             {Array.from({ length: levelData.size }).map((_, r) => (
               <View key={r} style={{ flexDirection: 'row' }}>
                 {Array.from({ length: levelData.size }).map((__, c) => (
@@ -300,6 +325,8 @@ export default function GameScreen() {
                     r={r}
                     c={c}
                     size={cellSize}
+                    boardSkin={boardSkin}
+                    ballSkin={ballSkin}
                   />
                 ))}
               </View>
@@ -332,7 +359,7 @@ export default function GameScreen() {
         <VictoryOverlay
           stars={stars}
           moves={moves}
-          coinsEarned={10 * stars}
+          coinsEarned={coinReward(difficulty, stars)}
           theme={theme}
           onNext={goNext}
           onReplay={onReset}
@@ -362,10 +389,14 @@ function ActionBtn({ icon, label, onPress, testID }: { icon: any; label: string;
   );
 }
 
-function GridCell({ state, r, c, size }: { state: GameState; r: number; c: number; size: number }) {
+function GridCell({ state, r, c, size, boardSkin, ballSkin }: {
+  state: GameState; r: number; c: number; size: number;
+  boardSkin: { bg: string; grid_line: string; accent: string };
+  ballSkin: { style: string; ring_opacity: number; glow: number };
+}) {
   const cell = state.grid[r][c];
-  const bg = 'rgba(255,255,255,0.03)';
-  const border = 'rgba(255,255,255,0.06)';
+  const border = boardSkin.grid_line;
+  const bg = 'transparent';
 
   let dotColor: string | null = null;
   let pathColor: string | null = null;
@@ -441,19 +472,57 @@ function GridCell({ state, r, c, size }: { state: GameState; r: number; c: numbe
       ) : null}
       {/* Dot */}
       {dotColor ? (
-        <View
-          style={{
-            width: size * 0.62, height: size * 0.62,
-            borderRadius: (size * 0.62) / 2,
-            backgroundColor: dotColor,
-            shadowColor: dotColor,
-            shadowOpacity: 0.9,
-            shadowRadius: 10,
-            shadowOffset: { width: 0, height: 0 },
-            borderWidth: 2,
-            borderColor: 'rgba(255,255,255,0.25)',
-          }}
-        />
+        <>
+          {ballSkin.style !== 'solid' ? (
+            <View
+              style={{
+                position: 'absolute',
+                width: size * 0.78, height: size * 0.78,
+                borderRadius: (size * 0.78) / 2,
+                borderWidth: 2,
+                borderColor: dotColor,
+                opacity: ballSkin.ring_opacity,
+              }}
+            />
+          ) : null}
+          {ballSkin.style === 'devcore' ? (
+            <View
+              style={{
+                position: 'absolute',
+                width: size * 0.85, height: size * 0.85,
+                borderWidth: 1.5,
+                borderColor: dotColor,
+                opacity: 0.45,
+                transform: [{ rotate: '45deg' }],
+              }}
+            />
+          ) : null}
+          {ballSkin.style === 'supernova' ? (
+            <View
+              style={{
+                position: 'absolute',
+                width: size * 0.92, height: size * 0.92,
+                borderRadius: (size * 0.92) / 2,
+                borderWidth: 1,
+                borderColor: dotColor,
+                opacity: 0.35,
+              }}
+            />
+          ) : null}
+          <View
+            style={{
+              width: size * 0.62, height: size * 0.62,
+              borderRadius: (size * 0.62) / 2,
+              backgroundColor: dotColor,
+              shadowColor: dotColor,
+              shadowOpacity: 0.85 * ballSkin.glow,
+              shadowRadius: 10 * ballSkin.glow,
+              shadowOffset: { width: 0, height: 0 },
+              borderWidth: 2,
+              borderColor: 'rgba(255,255,255,0.30)',
+            }}
+          />
+        </>
       ) : null}
     </View>
   );
@@ -635,11 +704,15 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
   grid: {
-    backgroundColor: 'rgba(10,10,10,0.95)',
+    backgroundColor: 'rgba(8,8,10,0.97)',
     borderRadius: radii.md,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.10)',
+    borderColor: 'rgba(255,255,255,0.12)',
+    shadowColor: '#F5C851',
+    shadowOpacity: 0.18,
+    shadowRadius: 28,
+    shadowOffset: { width: 0, height: 0 },
   },
 
   bottomBar: {

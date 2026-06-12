@@ -10,6 +10,7 @@ import { colors, spacing, radii } from '@/src/theme';
 import { api, type Pack } from '@/src/api/client';
 import { useProfile } from '@/src/state/profile';
 import { hapticLight, hapticSuccess, play } from '@/src/audio/feedback';
+import { showRewardedAd } from '@/src/ads/admob';
 
 const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL!;
 
@@ -106,6 +107,21 @@ export default function Shop() {
             regarder une vidéo bonus pour gagner gratuitement.
           </Text>
 
+          {/* Skins shortcut */}
+          <TouchableOpacity
+            testID="shop-skins-link"
+            style={styles.skinsRow}
+            onPress={() => { hapticLight(); router.push('/skins'); }}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="color-palette" size={22} color={colors.brand} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.adTitle}>Skins · Plateaux & sphères</Text>
+              <Text style={styles.adSub}>6 raretés · paye en pièces ou en USD</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={colors.brand} />
+          </TouchableOpacity>
+
           {/* Free coin via mock ad */}
           <TouchableOpacity
             testID="shop-reward-ad"
@@ -114,14 +130,18 @@ export default function Shop() {
               if (!profile) return;
               hapticLight();
               try {
-                await api.reward(profile.device_id, 50);
-                await syncNow();
-              } catch {
-                await addCoins(50);
-              }
-              play('coin');
-              hapticSuccess();
-              showToast('+50 pièces');
+                const result = await showRewardedAd();
+                if (!result.rewarded) return;
+                try {
+                  await api.reward(profile.device_id, 50);
+                  await syncNow();
+                } catch {
+                  await addCoins(50);
+                }
+                play('coin');
+                hapticSuccess();
+                showToast('+50 pièces');
+              } catch {}
             }}
             activeOpacity={0.85}
           >
@@ -210,6 +230,14 @@ const styles = StyleSheet.create({
     marginBottom: spacing.lg,
   },
 
+  skinsRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    padding: spacing.md,
+    borderRadius: radii.md,
+    backgroundColor: 'rgba(245,200,81,0.06)',
+    borderWidth: 1, borderColor: 'rgba(245,200,81,0.30)',
+    marginBottom: spacing.md,
+  },
   adRow: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
     padding: spacing.md,

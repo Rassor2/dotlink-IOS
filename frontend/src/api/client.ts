@@ -75,6 +75,12 @@ export type Profile = {
   coins: number;
   completed: Record<string, { level_id: string; stars: number; moves: number; time_ms: number }>;
   settings: { sound: boolean; music: boolean; haptics: boolean };
+  owned_skins?: string[];
+  active_skins?: { board?: string; ball?: string };
+  friend_code?: string;
+  friends?: string[];
+  tutorial_done?: boolean;
+  name_changes?: number;
 };
 
 export const api = {
@@ -113,5 +119,55 @@ export const api = {
     req<{ coins: number; added: number }>('/ads/reward', {
       method: 'POST',
       body: JSON.stringify({ device_id, amount }),
+    }),
+  rename: (device_id: string, name: string) =>
+    req<{ profile: Profile; cost: number; free: boolean }>('/profile/rename', {
+      method: 'POST',
+      body: JSON.stringify({ device_id, name }),
+    }),
+  renameCost: (device_id: string) =>
+    req<{ changes: number; cost: number; free_used: boolean }>(`/profile/rename-cost/${device_id}`),
+  tutorialComplete: (device_id: string) =>
+    req<{ already_done: boolean; reward: number; coins: number }>('/profile/tutorial-complete', {
+      method: 'POST',
+      body: JSON.stringify({ device_id }),
+    }),
+  leaderboard: (device_id?: string, limit = 100, scope: 'global' | 'friends' = 'global') =>
+    req<{
+      top: { rank: number; device_id: string; name: string; friend_code?: string; stars: number; completed: number; coins: number }[];
+      me: null | { rank: number; device_id: string; name: string; friend_code?: string; stars: number; completed: number; coins: number };
+    }>(`/leaderboard?limit=${limit}&scope=${scope}${device_id ? `&device_id=${device_id}` : ''}`),
+  friends: (device_id: string) =>
+    req<{ friends: { friend_code: string; name: string; stars: number; completed: number; coins: number }[]; friend_code?: string }>(
+      `/friends/${device_id}`,
+    ),
+  addFriend: (device_id: string, friend_code: string) =>
+    req<{ already: boolean; added?: string; friends: string[] }>('/friends/add', {
+      method: 'POST',
+      body: JSON.stringify({ device_id, friend_code }),
+    }),
+  removeFriend: (device_id: string, friend_code: string) =>
+    req<{ friends: string[] }>('/friends/remove', {
+      method: 'POST',
+      body: JSON.stringify({ device_id, friend_code }),
+    }),
+  skins: (device_id?: string) =>
+    req<{ catalog: { board: any[]; ball: any[] }; owned: string[]; active: { board?: string; ball?: string } }>(
+      `/skins${device_id ? `?device_id=${device_id}` : ''}`,
+    ),
+  buySkin: (device_id: string, skin_id: string) =>
+    req<{ ok: boolean; coins: number; owned: string[] }>('/skins/buy', {
+      method: 'POST',
+      body: JSON.stringify({ device_id, skin_id }),
+    }),
+  activateSkin: (device_id: string, skin_id: string) =>
+    req<{ ok: boolean; active: { board?: string; ball?: string } }>('/skins/activate', {
+      method: 'POST',
+      body: JSON.stringify({ device_id, skin_id }),
+    }),
+  skinCheckout: (device_id: string, skin_id: string, origin_url: string) =>
+    req<{ url: string; session_id: string }>('/skins/checkout', {
+      method: 'POST',
+      body: JSON.stringify({ device_id, skin_id, origin_url }),
     }),
 };

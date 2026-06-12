@@ -225,26 +225,22 @@ export function endStroke(state: GameState): GameState {
 }
 
 export function checkComplete(state: GameState): boolean {
-  // 1) Every color must have a complete path connecting both endpoints
+  // Win conditions (BOTH required):
+  //   1) Every color has a complete path connecting both endpoints
+  //   2) Every cell of the grid is filled
+  // The level designs (Hamiltonian paths) guarantee a unique solution exists.
   for (const d of state.dots) {
     const p = state.paths[d.color];
     if (!p || p.length < 2) return false;
     const first = p[0];
     const last = p[p.length - 1];
-    const hits = [
-      first.r === d.a[0] && first.c === d.a[1],
-      first.r === d.b[0] && first.c === d.b[1],
-      last.r === d.a[0] && last.c === d.a[1],
-      last.r === d.b[0] && last.c === d.b[1],
-    ];
-    const hitsAB = (hits[0] && hits[3]) || (hits[1] && hits[2]);
-    if (!hitsAB) return false;
+    const okAB = (first.r === d.a[0] && first.c === d.a[1] && last.r === d.b[0] && last.c === d.b[1]);
+    const okBA = (first.r === d.b[0] && first.c === d.b[1] && last.r === d.a[0] && last.c === d.a[1]);
+    if (!okAB && !okBA) return false;
   }
-  // 2) Every cell must be filled
   for (let r = 0; r < state.size; r++) {
     for (let c = 0; c < state.size; c++) {
-      const cell = state.grid[r][c];
-      if (cell.type === 'empty') return false;
+      if (state.grid[r][c].type === 'empty') return false;
     }
   }
   return true;
