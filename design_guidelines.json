@@ -1,0 +1,151 @@
+{
+  "app_name": "Dot Link",
+  "personality": "6 Glass / Luxe DARK",
+  "personality_one_liner": "A cinematic, cosmic puzzle journey where premium glass interfaces float above the deep obsidian void of space.",
+  "color": {
+    "surface": "#050505",
+    "onSurface": "#F2F2F2",
+    "surfaceSecondary": "#141414",
+    "onSurfaceSecondary": "#D4D4D4",
+    "surfaceTertiary": "#262626",
+    "onSurfaceTertiary": "#A3A3A3",
+    "surfaceInverse": "#F0F0F0",
+    "onSurfaceInverse": "#050505",
+    "brand": "#F5C851",
+    "brandPrimary": "#F5C851",
+    "onBrandPrimary": "#140F00",
+    "brandSecondary": "#32A852",
+    "onBrandSecondary": "#FFFFFF",
+    "brandTertiary": "#2E250A",
+    "onBrandTertiary": "#F5C851",
+    "success": "#2D8A46",
+    "onSuccess": "#FFFFFF",
+    "warning": "#D99021",
+    "onWarning": "#FFFFFF",
+    "error": "#C93B3B",
+    "onError": "#FFFFFF",
+    "info": "#4A4A4A",
+    "onInfo": "#FFFFFF",
+    "border": "#262626",
+    "borderStrong": "#404040",
+    "divider": "#1F1F1F"
+  },
+  "typography": {
+    "displayFontFamily": "Fraunces",
+    "textFontFamily": "Satoshi",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Use generous padding. Let the void (negative space) act as the primary framing device. Content should feel like it floats gracefully.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": "0",
+  "navigation": "stack_only",
+  "icon_set": "Phosphor",
+  "glassmorphism": {
+    "enabled": true,
+    "do's": [
+      "Use heavy glass blur for the bottom sheets, settings modals, and sticky top headers.",
+      "Overlay home screen main menu cards with glassmorphism against the cosmic background.",
+      "Ensure text on glass uses onSurface and the glass has a tinted base of at least 75% opacity to guarantee readability."
+    ],
+    "dont's": [
+      "Do not blur the puzzle grid itself or the gameplay area.",
+      "Do not use glass on small UI chips or form inputs."
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Home",
+      "purpose": "A breathtaking cinematic entry point that immerses the player into the 'Dot Link' universe.",
+      "states": {
+        "loading": "A single glowing gold dot pulsing gently in the center of an obsidian screen.",
+        "empty": "N/A",
+        "error": "Glassmorphic modal with a retry connection button."
+      },
+      "layout": "Full-screen cosmic background image with a vertical gradient scrim (transparent to 80% surface at bottom). The title 'Dot Link' is large in Fraunces serif. Below it, a vertical stack of premium glassmorphic buttons (Play, Shop, Settings) placed in the lower third thumb zone."
+    },
+    {
+      "name": "LevelMap",
+      "purpose": "A visually satisfying journey through the 5 difficulties (Lumina, Aurora, Zenith, Eclipse, Void).",
+      "states": {
+        "loading": "Centered spinner over glass background.",
+        "empty": "N/A",
+        "error": "Error loading map data, glass sheet with retry."
+      },
+      "layout": "Vertically scrolling winding path map. Nodes are circular: completed are filled gold, current has a glowing pulse, locked are frosted glass. A sticky glass header at the top shows total stars, current coins, and a back button. A fixed glass button at the bottom right to quickly jump to the 'Shop'."
+    },
+    {
+      "name": "Gameplay",
+      "purpose": "The core puzzle experience (hybrid Flow Free + One Line) focusing on touch precision and premium feedback.",
+      "states": {
+        "loading": "Grid skeleton loading.",
+        "empty": "N/A",
+        "error": "Failed to load level layout."
+      },
+      "layout": "Top bar (glass over void) with level number, pause button, and hints counter. Center: The puzzle grid with glowing colored dots and smooth line drawing (lines glow upon connection). Bottom area: A mocked reward video banner (glassmorphic container saying 'Watch Ad for +50 Coins') and a sticky primary CTA for 'Hint (25 coins)' or 'Undo'."
+    },
+    {
+      "name": "Shop & Profile",
+      "purpose": "Monetization hub with beautifully packaged IAP bundles and player stats.",
+      "states": {
+        "loading": "Fetching products...",
+        "empty": "N/A",
+        "error": "Could not connect to store."
+      },
+      "layout": "2-column grid of Stripe IAP packages. Each card uses a brandTertiary tinted gradient with a coin icon. The top section acts as the Profile with stats (Total Levels Cleared, Perfect Connections) sitting on a frosted glass surface."
+    }
+  ],
+  "images": {
+    "home_bg": {
+      "url": "https://images.pexels.com/photos/33441868/pexels-photo-33441868.jpeg",
+      "alt": "A mesmerizing abstract representation of a cosmic vortex swirling in the vastness of space",
+      "dark": "https://images.pexels.com/photos/33441868/pexels-photo-33441868.jpeg"
+    },
+    "map_bg": {
+      "url": "https://images.pexels.com/photos/12732215/pexels-photo-12732215.jpeg",
+      "alt": "Colorful 3D abstract geometric shapes",
+      "dark": "https://images.pexels.com/photos/12732215/pexels-photo-12732215.jpeg"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Implement the 'Dot Link' core logic allowing users to connect same-colored dots and fill the entire grid to complete the hybrid puzzle.",
+    "BANNED COLOR WORKAROUND: Since all blue/purple colors are strictly banned, use the following hex colors for the puzzle dots: Emerald (#32A852), Coral (#FF7F50), Amber (#FFC107), Rose (#E91E63), and Mint (#98FF98). Do NOT use any blue, navy, indigo, or purple dots.",
+    "Persist user progress (stars, unlocked levels, coin balance) using AsyncStorage or mmkv. Structure levels into 5 tiers: Lumina (Beginner), Aurora (Easy), Zenith (Medium), Eclipse (Hard), Void (Impossible). Generate level data programmatically if 50-100 levels per tier is too large to hardcode.",
+    "Implement premium haptics via expo-haptics on dot connection, level win, and button presses.",
+    "Mock the Stripe IAP and Reward Video ad UI using elegant glassmorphic components. When clicked, simulate a network request and grant coins.",
+    "Use react-native-reanimated for victory screens (confetti/particles when a level is completed) and smooth line drawing in the grid.",
+    "Include a settings modal (bottom sheet) for Sound, Music, and Haptics toggles. Integrate expo-av for basic sound effects (success chime, drawing hum) and a background ambient track.",
+    "Apply the mandatory vertical gradient scrim under text that sits on top of the background images."
+  ]
+}
