@@ -71,7 +71,10 @@ export default function SkinsScreen() {
     if (!profile) return;
     setBusy(s.id);
     try {
-      const res = await api.skinCheckout(profile.device_id, s.id, BACKEND_URL);
+      const origin = Platform.OS === 'web' && typeof window !== 'undefined'
+        ? window.location.origin
+        : BACKEND_URL;
+      const res = await api.skinCheckout(profile.device_id, s.id, origin);
       if (Platform.OS === 'web') {
         if (typeof window !== 'undefined') window.open(res.url, '_blank');
       } else {

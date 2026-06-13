@@ -74,7 +74,9 @@ export default function Shop() {
     hapticLight();
     setBusyPack(pack.id);
     try {
-      const origin = BACKEND_URL;
+      const origin = Platform.OS === 'web' && typeof window !== 'undefined'
+        ? window.location.origin
+        : BACKEND_URL;
       const res = await api.checkoutCreate(profile.device_id, pack.id, origin);
       setPollingSession(res.session_id);
       if (Platform.OS === 'web') {
