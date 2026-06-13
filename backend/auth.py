@@ -1,10 +1,15 @@
-"""Dot Link - Authentication (email/password + Emergent-managed Google).
+"""Dot Link - Authentication (email/password + Emergent-managed Google + Admin).
 
 One unified session layer: opaque session tokens stored in `user_sessions`,
-used identically for both providers. The account is linked to a canonical
+used identically for all providers. The account is linked to a canonical
 game profile (`profile_device_id`); progression from other devices is merged
 into it on login.
+
+Admin user (`admin2345`) is seeded from env vars (ADMIN_USERNAME / ADMIN_PASSWORD)
+on startup, has `is_admin=true`, and uses a separate /auth/admin/login endpoint
+that accepts username (not email).
 """
+import os
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional
