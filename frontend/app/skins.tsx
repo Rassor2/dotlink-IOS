@@ -26,7 +26,7 @@ const TIER_COLOR: Record<string, string> = {
 type Skin = any;
 
 export default function SkinsScreen() {
-  const { profile, syncNow } = useProfile();
+  const { profile, setServerCoins } = useProfile();
   const [data, setData] = useState<{ board: Skin[]; ball: Skin[] } | null>(null);
   const [owned, setOwned] = useState<string[]>([]);
   const [active, setActive] = useState<{ board?: string; ball?: string }>({});
@@ -57,8 +57,8 @@ export default function SkinsScreen() {
     if (profile.coins < s.coins) { showToast('Pas assez de pièces'); return; }
     setBusy(s.id);
     try {
-      await api.buySkin(profile.device_id, s.id);
-      await syncNow();
+      const res = await api.buySkin(profile.device_id, s.id);
+      setServerCoins(res.coins);
       await reload();
       play('coin'); hapticSuccess();
       showToast(`${s.name} débloqué !`);

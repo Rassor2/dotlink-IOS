@@ -16,7 +16,7 @@ const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL!;
 
 export default function Shop() {
   const router = useRouter();
-  const { profile, addCoins, syncNow } = useProfile();
+  const { profile, addCoins, setServerCoins, syncNow } = useProfile();
   const [packs, setPacks] = useState<Pack[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyPack, setBusyPack] = useState<string | null>(null);
@@ -133,8 +133,8 @@ export default function Shop() {
                 const result = await showRewardedAd();
                 if (!result.rewarded) return;
                 try {
-                  await api.reward(profile.device_id, 50);
-                  await syncNow();
+                  const r = await api.reward(profile.device_id, 50);
+                  setServerCoins(r.coins);
                 } catch {
                   await addCoins(50);
                 }

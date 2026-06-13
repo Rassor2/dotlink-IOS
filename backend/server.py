@@ -22,6 +22,7 @@ from levels import (
     get_levels,
 )
 from skins import get_all_skins, find_skin
+from auth import make_auth_router, ensure_auth_indexes
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -61,7 +62,8 @@ class LevelProgress(BaseModel):
 
 class ProgressIn(BaseModel):
     device_id: str
-    coins: int
+    coins: int = 0  # legacy absolute value (ignored when coin_delta is provided)
+    coin_delta: Optional[int] = None  # earned/spent since last successful sync
     completed: Dict[str, LevelProgress] = {}
     settings: Dict[str, Any] = {}
 
@@ -223,7 +225,13 @@ async def sync_profile(payload: ProgressIn):
             merged["time_ms"] = 0
         completed[level_id] = merged
 
-    new_coins = max(int(profile.get("coins", 0)), int(payload.coins))
+    # Server is authoritative for coins. The client sends a delta of coins
+    # earned/spent locally since its last successful sync. Using max() here
+    # previously resurrected spent coins after purchases (refund bug).
+    if payload.coin_delta is not None:
+        new_coins = max(0, int(profile.get("coins", 0)) + int(payload.coin_delta))
+    else:
+        new_coins = max(int(profile.get("coins", 0)), int(payload.coins))
     settings = {**profile.get("settings", {}), **(payload.settings or {})}
 
     await db.profiles.update_one(
@@ -805,7 +813,8 @@ async def skin_checkout(payload: SkinCheckoutIn):
     return {"url": session.url, "session_id": session.session_id}
 
 
-# Include the router
+# Include the routers
+api_router.include_router(make_auth_router(db, _get_or_create_profile))
 app.include_router(api_router)
 
 app.add_middleware(
@@ -827,6 +836,8 @@ logger = logging.getLogger(__name__)
 async def warmup():
     """Pre-generate level packs in the background so first request is fast."""
     import asyncio
+
+    await ensure_auth_indexes(db)
 
     async def _gen():
         loop = asyncio.get_event_loop()

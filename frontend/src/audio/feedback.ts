@@ -116,34 +116,85 @@ export function hapticError() {
   Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
 }
 
-// Music: warm piano-style chord progression generated as base64 WAV.
-// 4 chords (Cmaj7 → Am7 → Fmaj7 → G7sus4) × ~3s each = ~12s seamless loop.
-// Each chord is a stack of additive sine voices (5 harmonics) with a piano
-// ADSR envelope (sharp attack, exponential decay) — gives a warm, lounge feel.
+// Music: warm piano-style chord progression generated as a base64 WAV.
+// 8 chords × 4s = 32s seamless loop. Every note is rendered with a long
+// 6s decay tail that OVERLAPS the next chord (and wraps around the end of
+// the buffer back to the start), so there is no audible cut between notes
+// and the loop point is mathematically seamless.
 function buildAmbientDrone(): string {
-  const sampleRate = 22050;
-  // 4 chords × 3s = 12s
-  const chordDurMs = 3000;
-  const chords = [
-    // Cmaj7  : C3 E3 G3 B3 + low C2
-    [130.81, 164.81, 196.00, 246.94, 65.41],
-    // Am7    : A2 C3 E3 G3 + low A2
-    [110.00, 130.81, 164.81, 196.00, 55.00],
-    // Fmaj7  : F2 A2 C3 E3 + low F2
-    [87.31, 110.00, 130.81, 164.81, 43.65],
-    // G7sus4 : G2 C3 D3 F3 + low G2
-    [98.00, 130.81, 146.83, 174.61, 49.00],
+  const sampleRate = 11025;
+  const chordDurSec = 4;
+  // Warm lounge progression: Cmaj7 → Am7 → Fmaj7 → G7 → Em7 → Am7 → Dm7 → G7sus4
+  // Each chord: 4 voices + a low bass note. Voicings share common tones for
+  // smooth transitions.
+  const chords: number[][] = [
+    [130.81, 164.81, 196.00, 246.94, 65.41],  // Cmaj7   (C3 E3 G3 B3 + C2)
+    [110.00, 164.81, 196.00, 261.63, 55.00],  // Am7     (A2 E3 G3 C4 + A1)
+    [87.31, 130.81, 174.61, 220.00, 43.65],   // Fmaj7   (F2 C3 F3 A3 + F1)
+    [98.00, 146.83, 196.00, 246.94, 49.00],   // G7      (G2 D3 G3 B3 + G1)
+    [82.41, 123.47, 164.81, 196.00, 41.20],   // Em7     (E2 B2 E3 G3 + E1)
+    [110.00, 130.81, 164.81, 196.00, 55.00],  // Am7     (A2 C3 E3 G3 + A1)
+    [73.42, 110.00, 146.83, 174.61, 36.71],   // Dm7     (D2 A2 D3 F3 + D1)
+    [98.00, 130.81, 146.83, 174.61, 49.00],   // G7sus4  (G2 C3 D3 F3 + G1)
   ];
-  const totalMs = chordDurMs * chords.length;
-  const totalSamples = Math.floor((sampleRate * totalMs) / 1000);
+  const totalSec = chordDurSec * chords.length; // 32s
+  const totalSamples = sampleRate * totalSec;
+  const mix = new Float32Array(totalSamples);
 
+  // Piano-ish harmonic stack
+  const harmonics = [
+    { mult: 1, gain: 1.0 },
+    { mult: 2, gain: 0.5 },
+    { mult: 3, gain: 0.25 },
+    { mult: 4, gain: 0.12 },
+    { mult: 5, gain: 0.06 },
+  ];
+  const harmNorm = 1.93;
+
+  // Render each unique note once (cached), then mix at every onset.
+  const tailSec = 6; // long felt-piano tail, overlaps the next chord
+  const tailSamples = sampleRate * tailSec;
+  const noteCache = new Map<number, Float32Array>();
+  const renderNote = (f0: number): Float32Array => {
+    const cached = noteCache.get(f0);
+    if (cached) return cached;
+    const buf = new Float32Array(tailSamples);
+    for (let i = 0; i < tailSamples; i++) {
+      const t = i / sampleRate;
+      // 25ms soft attack, exp decay (tau 2.2s), final 0.5s fade to true zero
+      let env = t < 0.025 ? t / 0.025 : Math.exp(-(t - 0.025) / 2.2);
+      env *= Math.min(1, (tailSec - t) / 0.5);
+      let v = 0;
+      for (const h of harmonics) v += Math.sin(2 * Math.PI * f0 * h.mult * t) * h.gain;
+      buf[i] = (v / harmNorm) * env;
+    }
+    noteCache.set(f0, buf);
+    return buf;
+  };
+
+  for (let chordIdx = 0; chordIdx < chords.length; chordIdx++) {
+    const notes = chords[chordIdx];
+    // gentle arpeggio-light stagger; bass lands first
+    const offsets = [0.0, 0.06, 0.12, 0.18, 0.0];
+    const gains = [0.30, 0.28, 0.27, 0.25, 0.34];
+    for (let n = 0; n < notes.length; n++) {
+      const buf = renderNote(notes[n]);
+      const start = Math.floor((chordIdx * chordDurSec + offsets[n]) * sampleRate);
+      const gain = gains[n];
+      for (let i = 0; i < tailSamples; i++) {
+        // Wrap-around: tails that overshoot the loop end feed the loop start,
+        // which is what makes the loop join completely click-free.
+        mix[(start + i) % totalSamples] += buf[i] * gain;
+      }
+    }
+  }
+
+  // Post-processing: loop-periodic LFO (2 full cycles per loop) + soft clip.
   const buffer = new ArrayBuffer(44 + totalSamples * 2);
   const view = new DataView(buffer);
-
   const writeString = (offset: number, str: string) => {
     for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
   };
-
   writeString(0, 'RIFF');
   view.setUint32(4, 36 + totalSamples * 2, true);
   writeString(8, 'WAVE');
@@ -158,93 +209,20 @@ function buildAmbientDrone(): string {
   writeString(36, 'data');
   view.setUint32(40, totalSamples * 2, true);
 
-  // Piano-ish harmonic series: fundamental + 5 harmonics with decreasing gain
-  const harmonics = [
-    { mult: 1, gain: 1.0 },
-    { mult: 2, gain: 0.55 },
-    { mult: 3, gain: 0.30 },
-    { mult: 4, gain: 0.18 },
-    { mult: 5, gain: 0.10 },
-    { mult: 6, gain: 0.05 },
-  ];
-
-  const samplesPerChord = Math.floor((sampleRate * chordDurMs) / 1000);
-
-  // Pre-compute a warm "felt-piano" envelope: 30ms attack, slow exp decay (tau=2.4s)
-  function envelope(t: number, chordDurSec: number): number {
-    const attack = 0.03;
-    if (t < attack) return t / attack;
-    const decayTau = 2.4;
-    // Soft sustain tail with slight tremolo
-    const decay = Math.exp(-(t - attack) / decayTau);
-    return Math.max(0, decay);
+  const lfoFreq = 2 / totalSec; // periodic over the loop → no seam
+  for (let i = 0; i < totalSamples; i++) {
+    const lfo = 0.92 + 0.08 * Math.sin(2 * Math.PI * lfoFreq * (i / sampleRate));
+    const v = Math.tanh(mix[i] * 1.4) * 0.5 * lfo;
+    view.setInt16(44 + i * 2, Math.max(-1, Math.min(1, v)) * 32767, true);
   }
 
-  for (let chordIdx = 0; chordIdx < chords.length; chordIdx++) {
-    const notes = chords[chordIdx];
-    const startSample = chordIdx * samplesPerChord;
-    const endSample = startSample + samplesPerChord;
-    // Slight stagger between notes (arpeggio-light feel)
-    const noteOffsets = [0, 0.04, 0.08, 0.12, 0.0]; // bass at 0
-
-    for (let i = startSample; i < endSample; i++) {
-      const tInChord = (i - startSample) / sampleRate;
-      let s = 0;
-      for (let n = 0; n < notes.length; n++) {
-        const f0 = notes[n];
-        const offset = noteOffsets[n] || 0;
-        const t = tInChord - offset;
-        if (t < 0) continue;
-        const env = envelope(t, chordDurMs / 1000);
-        // Per-note gain: bass note quieter relative
-        const noteGain = (n === notes.length - 1) ? 0.35 : (n === 0 ? 0.32 : 0.30);
-        let voice = 0;
-        for (const h of harmonics) {
-          voice += Math.sin(2 * Math.PI * f0 * h.mult * t) * h.gain;
-        }
-        // Normalize harmonic stack
-        voice /= 2.18;
-        s += voice * env * noteGain;
-      }
-      // Crossfade between chords for seamless transition (last 250ms blend with next chord's first note)
-      const xfade = 0.25;
-      if (tInChord > (chordDurMs / 1000) - xfade && chordIdx < chords.length - 1) {
-        const fadeIn = (tInChord - ((chordDurMs / 1000) - xfade)) / xfade;
-        const nextNotes = chords[(chordIdx + 1) % chords.length];
-        const tNext = tInChord - (chordDurMs / 1000);
-        if (tNext >= 0 - xfade) {
-          let next = 0;
-          for (let n = 0; n < nextNotes.length; n++) {
-            const f0 = nextNotes[n];
-            const tn = tNext + xfade;
-            if (tn < 0) continue;
-            const env = envelope(tn, chordDurMs / 1000);
-            const noteGain = (n === nextNotes.length - 1) ? 0.35 : (n === 0 ? 0.32 : 0.30);
-            let voice = 0;
-            for (const h of harmonics) {
-              voice += Math.sin(2 * Math.PI * f0 * h.mult * tn) * h.gain;
-            }
-            voice /= 2.18;
-            next += voice * env * noteGain;
-          }
-          s = s * (1 - fadeIn) + next * fadeIn;
-        }
-      }
-      // Subtle stereo-less ambient pad: slow LFO on overall volume
-      const lfo = 0.92 + 0.08 * Math.sin(2 * Math.PI * 0.10 * (i / sampleRate));
-      // Soft clip / saturate slightly for warmth
-      let v = Math.tanh(s * 1.5) * 0.42 * lfo;
-      // Boundary fades to avoid loop click
-      const fadeSamples = sampleRate * 0.25;
-      if (i < fadeSamples) v *= i / fadeSamples;
-      if (i > totalSamples - fadeSamples) v *= (totalSamples - i) / fadeSamples;
-      view.setInt16(44 + i * 2, Math.max(-1, Math.min(1, v)) * 32767, true);
-    }
-  }
-
+  // Base64 encode in chunks (fast, avoids per-byte string concat)
   const bytes = new Uint8Array(buffer);
   let bin = '';
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  const CHUNK = 8192;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK) as unknown as number[]);
+  }
   // @ts-ignore
   const b64 = typeof btoa === 'function' ? btoa(bin) : globalThis.Buffer?.from(bin, 'binary').toString('base64');
   return `data:audio/wav;base64,${b64}`;

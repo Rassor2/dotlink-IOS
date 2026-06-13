@@ -43,6 +43,7 @@ import {
 import { showRewardedAd } from '@/src/ads/admob';
 import { resolveBoardSkin, resolveBallSkin } from '@/src/skins/catalog';
 import { BoardMotif } from '@/src/skins/visuals';
+import Svg, { Polyline } from 'react-native-svg';
 
 const HINT_COST = 40;
 const SCREEN_W = Dimensions.get('window').width;
@@ -68,7 +69,7 @@ export default function GameScreen() {
   const levelIdx = parseInt(params.level || '1', 10);
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { profile, addCoins, spendCoins, markLevel } = useProfile();
+  const { profile, addCoins, spendCoins, setServerCoins, markLevel } = useProfile();
 
   const theme = WORLD_THEMES[difficulty] || WORLD_THEMES.lumina;
 
@@ -89,6 +90,7 @@ export default function GameScreen() {
     setMoves(0);
     setCompleted(false);
     setStars(0);
+    solutionRef.current = null;
     startTimeRef.current = Date.now();
     try {
       const data = await api.level(difficulty, levelIdx);
@@ -208,35 +210,51 @@ export default function GameScreen() {
     router.replace(`/game/${difficulty}/${Math.min(levelIdx + 1, 999)}`);
   };
 
+  const solutionRef = useRef<{ color: string; path: [number, number][] }[] | null>(null);
+
   const onHint = async () => {
-    if (!profile || !state || !levelData) return;
+    if (!profile || !state || !levelData || completed) return;
     if (profile.coins < HINT_COST) {
       hapticError();
+      play('error');
       return;
     }
-    const ok = await spendCoins(HINT_COST);
-    if (!ok) return;
-    hapticMedium();
-    // Find an unconnected color and reveal first 2 steps from one endpoint
+    // Each press solves ONE full color pair: the first not-yet-connected one.
+    // Because the hint fully connects that color, the next press automatically
+    // targets a different pair.
     const target = levelData.dots.find((d) => !isColorConnected(state, d.color));
     if (!target) return;
     try {
-      const full = await api.level(difficulty, levelIdx);
-      // Need solution -- ask backend
-      const res = await fetch(`${process.env.EXPO_PUBLIC_BACKEND_URL}/api/level/${difficulty}/${levelIdx}?include_solution=true`);
-      const data = await res.json();
-      const sol = data.solution?.find((s: any) => s.color === target.color);
-      if (!sol) return;
-      // Pick 3 cells from the start
-      const reveal = sol.path.slice(0, Math.min(3, sol.path.length - 1));
-      // Apply via begin + extend
-      let newState = state;
-      newState = beginAt({ ...newState }, { r: reveal[0][0], c: reveal[0][1] });
-      for (let i = 1; i < reveal.length; i++) {
-        const res2 = extendTo({ ...newState }, { r: reveal[i][0], c: reveal[i][1] });
+      if (!solutionRef.current) {
+        const res = await fetch(`${process.env.EXPO_PUBLIC_BACKEND_URL}/api/level/${difficulty}/${levelIdx}?include_solution=true`);
+        const data = await res.json();
+        solutionRef.current = data.solution || [];
+      }
+      const sol = solutionRef.current?.find((s) => s.color === target.color);
+      if (!sol || sol.path.length < 2) return;
+      const ok = await spendCoins(HINT_COST);
+      if (!ok) return;
+      hapticMedium();
+      // Draw the complete correct path between the two dots of this color
+      let newState = beginAt({ ...state }, { r: sol.path[0][0], c: sol.path[0][1] });
+      let nowCompleted = false;
+      for (let i = 1; i < sol.path.length; i++) {
+        const res2 = extendTo({ ...newState }, { r: sol.path[i][0], c: sol.path[i][1] });
         newState = res2.state;
+        if (res2.completed) nowCompleted = true;
       }
       setState({ ...newState, drawing: null });
+      setMoves((m) => m + 1);
+      if (nowCompleted) {
+        setCompleted(true);
+        const colorCount = levelData.dots.length || 1;
+        const s = computeStars(moves + 1, colorCount + 2, true);
+        setStars(s);
+        hapticSuccess();
+        play('win');
+      } else {
+        play('connect');
+      }
     } catch {}
   };
 
@@ -245,10 +263,17 @@ export default function GameScreen() {
     try {
       const result = await showRewardedAd();
       if (result.rewarded) {
+        // Server credits the reward; only fall back to a local credit offline.
         try {
-          if (profile) await api.reward(profile.device_id, 50);
-        } catch {}
-        await addCoins(50);
+          if (profile) {
+            const r = await api.reward(profile.device_id, 50);
+            setServerCoins(r.coins);
+          } else {
+            await addCoins(50);
+          }
+        } catch {
+          await addCoins(50);
+        }
         play('coin');
         hapticSuccess();
       }
@@ -316,6 +341,7 @@ export default function GameScreen() {
             testID="game-grid"
           >
             <BoardMotif skinId={boardSkin.id} size={gridSize} />
+            <PathsOverlay state={state} cellSize={cellSize} gridSize={gridSize} />
             {Array.from({ length: levelData.size }).map((_, r) => (
               <View key={r} style={{ flexDirection: 'row' }}>
                 {Array.from({ length: levelData.size }).map((__, c) => (
@@ -389,6 +415,47 @@ function ActionBtn({ icon, label, onPress, testID }: { icon: any; label: string;
   );
 }
 
+// Draws every color path as a single rounded line (Flow-style). Thin strokes
+// with round caps/joins guarantee that two parallel segments of the same
+// color never visually merge into blocks or squares.
+function PathsOverlay({ state, cellSize, gridSize }: {
+  state: GameState; cellSize: number; gridSize: number;
+}) {
+  const center = (v: number) => v * cellSize + cellSize / 2;
+  const entries = Object.entries(state.paths).filter(([, path]) => path && path.length > 1);
+  return (
+    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+      <Svg width={gridSize} height={gridSize}>
+        {entries.map(([color, path]) => {
+          const points = path.map((p) => `${center(p.c)},${center(p.r)}`).join(' ');
+          return (
+            <React.Fragment key={color}>
+              {/* soft glow under the line */}
+              <Polyline
+                points={points}
+                fill="none"
+                stroke={color}
+                strokeOpacity={0.18}
+                strokeWidth={cellSize * 0.52}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <Polyline
+                points={points}
+                fill="none"
+                stroke={color}
+                strokeWidth={cellSize * 0.26}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </React.Fragment>
+          );
+        })}
+      </Svg>
+    </View>
+  );
+}
+
 function GridCell({ state, r, c, size, boardSkin, ballSkin }: {
   state: GameState; r: number; c: number; size: number;
   boardSkin: { bg: string; grid_line: string; accent: string };
@@ -396,56 +463,15 @@ function GridCell({ state, r, c, size, boardSkin, ballSkin }: {
 }) {
   const cell = state.grid[r][c];
   const border = boardSkin.grid_line;
-  const bg = 'transparent';
 
   let dotColor: string | null = null;
-  let pathColor: string | null = null;
-  if (cell.type === 'dot') dotColor = cell.color;
-  else if (cell.type === 'path') pathColor = cell.color;
-
-  // Determine which neighbors share the path color (for line connectors)
-  const neighbours: Array<{ dx: number; dy: number; key: 'up' | 'down' | 'left' | 'right' }> = [
-    { dx: -1, dy: 0, key: 'up' },
-    { dx: 1, dy: 0, key: 'down' },
-    { dx: 0, dy: -1, key: 'left' },
-    { dx: 0, dy: 1, key: 'right' },
-  ];
-  const hasSameColor = (nr: number, nc: number, color: string) => {
-    if (nr < 0 || nc < 0 || nr >= state.size || nc >= state.size) return false;
-    const nc2 = state.grid[nr][nc];
-    if (nc2.type === 'path' && nc2.color === color) return true;
-    if (nc2.type === 'dot' && nc2.color === color) {
-      // Only connect if dot is part of an active path containing this cell
-      const path = state.paths[color];
-      if (!path) return false;
-      const idxThis = path.findIndex((p) => p.r === r && p.c === c);
-      const idxNeigh = path.findIndex((p) => p.r === nr && p.c === nc);
-      if (idxThis < 0 || idxNeigh < 0) return false;
-      return Math.abs(idxThis - idxNeigh) === 1;
-    }
-    return false;
-  };
-
-  let connColor: string | null = null;
-  let conns: Record<string, boolean> = { up: false, down: false, left: false, right: false };
-  if (cell.type === 'path') {
-    connColor = cell.color;
-    for (const n of neighbours) {
-      conns[n.key] = hasSameColor(r + n.dx, c + n.dy, cell.color);
-    }
-  } else if (cell.type === 'dot') {
-    // Dot cell can also show short stub connection to neighbouring same-color path
-    const dotColor2 = cell.color;
-    const path = state.paths[dotColor2];
-    if (path && path.length > 0) {
-      const idxThis = path.findIndex((p) => p.r === r && p.c === c);
-      if (idxThis >= 0) {
-        connColor = dotColor2;
-        for (const n of neighbours) {
-          conns[n.key] = hasSameColor(r + n.dx, c + n.dy, dotColor2);
-        }
-      }
-    }
+  let coveredColor: string | null = null;
+  if (cell.type === 'dot') {
+    dotColor = cell.color;
+    const path = state.paths[cell.color];
+    if (path && path.some((p) => p.r === r && p.c === c)) coveredColor = cell.color;
+  } else if (cell.type === 'path') {
+    coveredColor = cell.color;
   }
 
   return (
@@ -454,22 +480,11 @@ function GridCell({ state, r, c, size, boardSkin, ballSkin }: {
         width: size, height: size,
         borderWidth: 0.5,
         borderColor: border,
-        backgroundColor: bg,
+        // Subtle tint shows board coverage progress (100% fill win condition)
+        backgroundColor: coveredColor ? coveredColor + '14' : 'transparent',
         alignItems: 'center', justifyContent: 'center',
       }}
     >
-      {/* Path connectors */}
-      {connColor ? (
-        <>
-          {conns.up && <View style={{ position: 'absolute', top: 0, width: size * 0.32, height: size * 0.5 + 1, backgroundColor: connColor }} />}
-          {conns.down && <View style={{ position: 'absolute', bottom: 0, width: size * 0.32, height: size * 0.5 + 1, backgroundColor: connColor }} />}
-          {conns.left && <View style={{ position: 'absolute', left: 0, width: size * 0.5 + 1, height: size * 0.32, backgroundColor: connColor }} />}
-          {conns.right && <View style={{ position: 'absolute', right: 0, width: size * 0.5 + 1, height: size * 0.32, backgroundColor: connColor }} />}
-          {pathColor && (
-            <View style={{ width: size * 0.32, height: size * 0.32, backgroundColor: connColor }} />
-          )}
-        </>
-      ) : null}
       {/* Dot */}
       {dotColor ? (
         <>

@@ -56,6 +56,22 @@ export default function Settings() {
         />
 
         <TouchableOpacity
+          testID="settings-account"
+          style={styles.tutBtn}
+          onPress={() => { hapticTap(); router.push('/auth'); }}
+          activeOpacity={0.85}
+        >
+          <View style={styles.rowIcon}>
+            <Ionicons name="person-circle-outline" size={18} color={colors.brand} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.rowTitle}>Compte</Text>
+            <Text style={styles.rowDesc}>Connexion · sauvegarde ta progression</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={colors.onSurfaceTertiary} />
+        </TouchableOpacity>
+
+        <TouchableOpacity
           testID="settings-replay-tutorial"
           style={styles.tutBtn}
           onPress={() => { hapticTap(); router.push('/tutorial'); }}

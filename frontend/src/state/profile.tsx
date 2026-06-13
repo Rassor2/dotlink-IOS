@@ -3,6 +3,7 @@ import { storage } from '@/src/utils/storage';
 import { api, getDeviceId, type Profile } from '@/src/api/client';
 
 const LOCAL_KEY = 'dotlink_profile_v1';
+const DELTA_KEY = 'dotlink_coin_delta_v1';
 
 type ProfileState = Profile;
 
@@ -11,6 +12,7 @@ type Ctx = {
   loading: boolean;
   addCoins: (amount: number) => Promise<void>;
   spendCoins: (amount: number) => Promise<boolean>;
+  setServerCoins: (serverTotal: number) => void;
   markLevel: (
     levelId: string,
     info: { stars: number; moves: number; time_ms: number },
@@ -27,7 +29,7 @@ function defaultProfile(deviceId: string): Profile {
     id: deviceId,
     device_id: deviceId,
     name: 'Joueur',
-    coins: 250,
+    coins: 100,
     completed: {},
     settings: { sound: true, music: true, haptics: true },
   };
@@ -37,35 +39,56 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const syncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Coins earned/spent locally that the server hasn't applied yet.
+  // The server is the source of truth; we only ever send deltas.
+  const deltaRef = useRef(0);
+  const profileRef = useRef<Profile | null>(null);
+  profileRef.current = profile;
 
   const persistLocal = useCallback(async (p: Profile) => {
     await storage.setItem(LOCAL_KEY, JSON.stringify(p));
   }, []);
 
-  const scheduleSync = useCallback((p: Profile) => {
+  const persistDelta = useCallback(async () => {
+    await storage.setItem(DELTA_KEY, deltaRef.current);
+  }, []);
+
+  const doSync = useCallback(async () => {
+    const p = profileRef.current;
+    if (!p) return;
+    const sentDelta = deltaRef.current;
+    try {
+      const merged = await api.syncProfile({
+        device_id: p.device_id,
+        coin_delta: sentDelta,
+        completed: p.completed,
+        settings: p.settings,
+      });
+      deltaRef.current -= sentDelta;
+      await persistDelta();
+      const next = { ...merged, coins: Math.max(0, (merged.coins ?? 0) + deltaRef.current) };
+      setProfile(next);
+      await persistLocal(next);
+    } catch (e) {
+      // offline – local stays source of truth meanwhile, delta is preserved
+    }
+  }, [persistLocal, persistDelta]);
+
+  const scheduleSync = useCallback(() => {
     if (syncTimer.current) clearTimeout(syncTimer.current);
-    syncTimer.current = setTimeout(async () => {
-      try {
-        const merged = await api.syncProfile({
-          device_id: p.device_id,
-          coins: p.coins,
-          completed: p.completed,
-          settings: p.settings,
-        });
-        setProfile(merged);
-        await persistLocal(merged);
-      } catch (e) {
-        // offline – it's fine, local is source of truth meanwhile
-      }
-    }, 1200);
-  }, [persistLocal]);
+    syncTimer.current = setTimeout(doSync, 1200);
+  }, [doSync]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
       const deviceId = await getDeviceId();
       // Load local first for instant UI
-      const raw = await storage.getItem(LOCAL_KEY);
+      const [raw, storedDelta] = await Promise.all([
+        storage.getItem(LOCAL_KEY, ''),
+        storage.getItem(DELTA_KEY, 0),
+      ]);
+      deltaRef.current = typeof storedDelta === 'number' ? storedDelta : 0;
       let localProfile: Profile | null = null;
       if (raw) {
         try { localProfile = JSON.parse(raw); } catch {}
@@ -74,12 +97,11 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
         setProfile(localProfile);
       }
       try {
-        // Hydrate from server (server-side may have higher coins/progress)
+        // Server is authoritative for coins (+ any unsynced local delta)
         const remote = await api.initProfile(deviceId);
-        // Merge with local: take MAX
         const merged: Profile = {
           ...remote,
-          coins: Math.max(remote.coins ?? 0, localProfile?.coins ?? 0),
+          coins: Math.max(0, (remote.coins ?? 0) + deltaRef.current),
           completed: { ...(remote.completed || {}), ...(localProfile?.completed || {}) },
           settings: { ...(remote.settings || {}), ...(localProfile?.settings || {}) },
         };
@@ -94,8 +116,8 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
         }
         setProfile(merged);
         await persistLocal(merged);
-        // Push merged back to server best-effort
-        scheduleSync(merged);
+        // Push delta + progress back to server best-effort
+        scheduleSync();
       } catch {
         if (!localProfile) {
           setProfile(defaultProfile(deviceId));
@@ -113,14 +135,16 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
       if (!cur) return cur;
       const next = mut(cur);
       persistLocal(next);
-      scheduleSync(next);
+      scheduleSync();
       return next;
     });
   }, [persistLocal, scheduleSync]);
 
   const addCoins = useCallback(async (amount: number) => {
+    deltaRef.current += amount;
+    persistDelta();
     await update((p) => ({ ...p, coins: Math.max(0, p.coins + amount) }));
-  }, [update]);
+  }, [update, persistDelta]);
 
   const spendCoins = useCallback(async (amount: number) => {
     let ok = false;
@@ -128,14 +152,27 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
       if (!cur) return cur;
       if (cur.coins < amount) return cur;
       ok = true;
+      deltaRef.current -= amount;
+      persistDelta();
       const next = { ...cur, coins: cur.coins - amount };
       persistLocal(next);
-      scheduleSync(next);
+      scheduleSync();
       return next;
     });
-    // Small wait for state mutation observation - return after setProfile resolves synchronously
     return ok;
-  }, [persistLocal, scheduleSync]);
+  }, [persistLocal, persistDelta, scheduleSync]);
+
+  // Use after a server endpoint already credited/debited coins (ads reward,
+  // skin purchase, rename...). serverTotal is authoritative; we only add the
+  // still-unsynced local delta on top.
+  const setServerCoins = useCallback((serverTotal: number) => {
+    setProfile((cur) => {
+      if (!cur) return cur;
+      const next = { ...cur, coins: Math.max(0, serverTotal + deltaRef.current) };
+      persistLocal(next);
+      return next;
+    });
+  }, [persistLocal]);
 
   const markLevel = useCallback(async (
     levelId: string,
@@ -158,18 +195,9 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
   }, [update]);
 
   const syncNow = useCallback(async () => {
-    if (!profile) return;
-    try {
-      const merged = await api.syncProfile({
-        device_id: profile.device_id,
-        coins: profile.coins,
-        completed: profile.completed,
-        settings: profile.settings,
-      });
-      setProfile(merged);
-      await persistLocal(merged);
-    } catch {}
-  }, [profile, persistLocal]);
+    if (syncTimer.current) clearTimeout(syncTimer.current);
+    await doSync();
+  }, [doSync]);
 
   return (
     <ProfileContext.Provider value={{
@@ -177,6 +205,7 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
       loading,
       addCoins,
       spendCoins,
+      setServerCoins,
       markLevel,
       updateSettings,
       refresh,

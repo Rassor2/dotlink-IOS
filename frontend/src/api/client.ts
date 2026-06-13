@@ -19,13 +19,20 @@ let cachedDeviceId: string | null = null;
 
 export async function getDeviceId(): Promise<string> {
   if (cachedDeviceId) return cachedDeviceId;
-  let id = await storage.getItem(DEVICE_KEY);
+  let id: string = (await storage.getItem<string>(DEVICE_KEY, '')) || '';
   if (!id) {
     id = uuid();
     await storage.setItem(DEVICE_KEY, id);
   }
   cachedDeviceId = id;
   return id;
+}
+
+// Switch the active profile key after login: the account's canonical
+// profile_device_id becomes this device's identity.
+export async function setDeviceId(id: string): Promise<void> {
+  cachedDeviceId = id;
+  await storage.setItem(DEVICE_KEY, id);
 }
 
 async function req<T = any>(path: string, opts: RequestInit = {}): Promise<T> {
@@ -83,6 +90,17 @@ export type Profile = {
   name_changes?: number;
 };
 
+export type AuthUser = {
+  user_id: string;
+  email: string;
+  name?: string | null;
+  picture?: string | null;
+  provider: 'local' | 'google';
+  profile_device_id?: string | null;
+};
+
+export type AuthResponse = { session_token: string; user: AuthUser };
+
 export const api = {
   difficulties: () => req<{ difficulties: DifficultyMeta[] }>('/difficulties'),
   levels: (difficulty: string) =>
@@ -96,7 +114,7 @@ export const api = {
   getProfile: (device_id: string) => req<Profile>(`/profile/${device_id}`),
   syncProfile: (payload: {
     device_id: string;
-    coins: number;
+    coin_delta: number;
     completed: Record<string, any>;
     settings: any;
   }) =>
@@ -169,5 +187,30 @@ export const api = {
     req<{ url: string; session_id: string }>('/skins/checkout', {
       method: 'POST',
       body: JSON.stringify({ device_id, skin_id, origin_url }),
+    }),
+  // ---- Auth ----
+  authRegister: (email: string, password: string, name: string | undefined, device_id: string) =>
+    req<AuthResponse>('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ email, password, name, device_id }),
+    }),
+  authLogin: (email: string, password: string, device_id: string) =>
+    req<AuthResponse>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password, device_id }),
+    }),
+  authGoogleSession: (session_id: string, device_id: string) =>
+    req<AuthResponse>('/auth/google/session', {
+      method: 'POST',
+      body: JSON.stringify({ session_id, device_id }),
+    }),
+  authMe: (token: string) =>
+    req<{ user: AuthUser }>('/auth/me', {
+      headers: { Authorization: `Bearer ${token}` },
+    }),
+  authLogout: (token: string) =>
+    req<{ ok: boolean }>('/auth/logout', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
     }),
 };
