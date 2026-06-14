@@ -95,11 +95,24 @@ export type AuthUser = {
   email: string;
   name?: string | null;
   picture?: string | null;
-  provider: 'local' | 'google';
+  provider: 'local' | 'google' | 'admin';
   profile_device_id?: string | null;
+  is_admin?: boolean;
 };
 
 export type AuthResponse = { session_token: string; user: AuthUser };
+
+export type AdminEntry = {
+  rank: number;
+  device_id: string;
+  name: string;
+  friend_code?: string;
+  stars: number;
+  completed: number;
+  coins: number;
+  has_account: boolean;
+  updated_at?: string;
+};
 
 export const api = {
   difficulties: () => req<{ difficulties: DifficultyMeta[] }>('/difficulties'),

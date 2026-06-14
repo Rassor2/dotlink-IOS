@@ -41,6 +41,11 @@ class GoogleSessionIn(BaseModel):
     device_id: Optional[str] = None
 
 
+class AdminLoginIn(BaseModel):
+    username: str
+    password: str
+
+
 def _hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
@@ -64,6 +69,7 @@ def _user_out(user: dict) -> dict:
         "picture": user.get("picture"),
         "provider": user.get("provider", "local"),
         "profile_device_id": user.get("profile_device_id"),
+        "is_admin": bool(user.get("is_admin", False)),
     }
 
 
@@ -147,6 +153,9 @@ def make_auth_router(db, get_or_create_profile) -> APIRouter:
         user = await db.users.find_one({"email": email}, {"_id": 0})
         if not user or not user.get("password_hash") or not _verify_password(payload.password, user["password_hash"]):
             raise HTTPException(401, "Email ou mot de passe incorrect")
+        if user.get("is_admin"):
+            # Admins MUST use the dedicated admin endpoint
+            raise HTTPException(401, "Email ou mot de passe incorrect")
         user["profile_device_id"] = await _link_profile(user, payload.device_id)
         token = await _create_session(user["user_id"])
         return await _auth_payload(user, token)
@@ -177,6 +186,23 @@ def make_auth_router(db, get_or_create_profile) -> APIRouter:
             await db.users.insert_one(dict(user))
         user["profile_device_id"] = await _link_profile(user, payload.device_id)
         token = await _create_session(user["user_id"], token=data.get("session_token"))
+        return await _auth_payload(user, token)
+
+    @router.post("/admin/login")
+    async def admin_login(payload: AdminLoginIn):
+        """Username/password login restricted to admin accounts.
+        Regular users CANNOT use this endpoint to authenticate."""
+        username = (payload.username or "").strip()
+        if not username or not payload.password:
+            raise HTTPException(400, "Identifiants requis")
+        user = await db.users.find_one({"username": username}, {"_id": 0})
+        if not user or not user.get("is_admin"):
+            # Generic error to avoid leaking that admin exists
+            raise HTTPException(401, "Identifiants admin incorrects")
+        if not user.get("password_hash") or not _verify_password(payload.password, user["password_hash"]):
+            raise HTTPException(401, "Identifiants admin incorrects")
+        # Admins do not merge device profiles (no game progression attached)
+        token = await _create_session(user["user_id"])
         return await _auth_payload(user, token)
 
     async def _current_user(request: Request) -> dict:
@@ -216,6 +242,81 @@ def make_auth_router(db, get_or_create_profile) -> APIRouter:
 async def ensure_auth_indexes(db):
     await db.users.create_index("email", unique=True)
     await db.users.create_index("user_id", unique=True)
+    await db.users.create_index(
+        "username",
+        unique=True,
+        partialFilterExpression={"username": {"$exists": True}},
+    )
     await db.user_sessions.create_index("session_token", unique=True)
     await db.user_sessions.create_index("user_id")
     await db.user_sessions.create_index("expires_at", expireAfterSeconds=0)
+
+
+async def seed_admin_user(db) -> None:
+    """Create the admin account from env vars on startup (idempotent).
+    Keeps the password_hash in sync if ADMIN_PASSWORD changes between boots."""
+    username = (os.environ.get("ADMIN_USERNAME") or "").strip()
+    password = os.environ.get("ADMIN_PASSWORD") or ""
+    if not username or not password:
+        return
+    existing = await db.users.find_one({"username": username}, {"_id": 0})
+    now_iso = _now().isoformat()
+    if existing:
+        patch = {"is_admin": True}
+        # Refresh hash if password no longer matches (admin rotation via env)
+        if not existing.get("password_hash") or not _verify_password(password, existing["password_hash"]):
+            patch["password_hash"] = _hash_password(password)
+            patch["updated_at"] = now_iso
+        await db.users.update_one({"username": username}, {"$set": patch})
+        return
+    admin = {
+        "user_id": f"admin_{uuid.uuid4().hex[:12]}",
+        "username": username,
+        "email": f"{username}@admin.local",  # internal only, never used for login
+        "name": "Modérateur",
+        "password_hash": _hash_password(password),
+        "provider": "admin",
+        "is_admin": True,
+        "profile_device_id": None,
+        "created_at": now_iso,
+    }
+    try:
+        await db.users.insert_one(dict(admin))
+    except Exception:
+        # Race condition: another worker beat us. Fine.
+        pass
+
+
+def make_auth_deps(db):
+    """Return (current_user, current_admin) FastAPI dependencies bound to this db.
+
+    - current_user: validates the Bearer session token and returns the user dict.
+    - current_admin: same as above but also requires is_admin=True. Returns 403
+      for non-admin users (vs. 401 for missing/invalid tokens).
+    """
+    async def current_user(request: Request) -> dict:
+        auth = request.headers.get("Authorization") or ""
+        if not auth.startswith("Bearer "):
+            raise HTTPException(401, "Non authentifié")
+        token = auth[7:].strip()
+        session = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
+        if not session:
+            raise HTTPException(401, "Session expirée")
+        expires = session.get("expires_at")
+        if isinstance(expires, datetime):
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=timezone.utc)
+            if expires < _now():
+                raise HTTPException(401, "Session expirée")
+        user = await db.users.find_one({"user_id": session["user_id"]}, {"_id": 0})
+        if not user:
+            raise HTTPException(401, "Utilisateur introuvable")
+        return user
+
+    async def current_admin(request: Request) -> dict:
+        user = await current_user(request)
+        if not user.get("is_admin"):
+            raise HTTPException(403, "Accès réservé aux administrateurs")
+        return user
+
+    return current_user, current_admin

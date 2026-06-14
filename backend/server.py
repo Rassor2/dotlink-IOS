@@ -1,5 +1,5 @@
 """Dot Link backend - FastAPI + MongoDB + Stripe (emergent integration)."""
-from fastapi import FastAPI, APIRouter, HTTPException, Request
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Depends
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -18,7 +18,7 @@ from levels import (
     get_levels,
 )
 from skins import get_all_skins, find_skin
-from auth import make_auth_router, ensure_auth_indexes
+from auth import make_auth_router, ensure_auth_indexes, seed_admin_user, make_auth_deps
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -809,6 +809,162 @@ async def skin_checkout(payload: SkinCheckoutIn):
     return {"url": session.url, "session_id": session.session_id}
 
 
+# ---------------- Admin (RBAC) ----------------
+_current_user_dep, _current_admin_dep = make_auth_deps(db)
+
+
+class AdminUpdateProfileIn(BaseModel):
+    name: Optional[str] = None
+    coins: Optional[int] = None
+    reset_progress: Optional[bool] = False
+
+
+@api_router.get("/admin/leaderboard")
+async def admin_leaderboard(
+    limit: int = 200,
+    search: Optional[str] = None,
+    admin: dict = Depends(_current_admin_dep),
+):
+    """Full unfiltered leaderboard view for moderation. Includes all players,
+    even those with 0 stars. Admin only."""
+    limit = max(1, min(limit, 500))
+    query: Dict[str, Any] = {}
+    if search:
+        query["name"] = {"$regex": search.strip(), "$options": "i"}
+    pipeline = [
+        {"$match": query} if query else {"$match": {}},
+        {"$project": {
+            "_id": 0,
+            "device_id": 1,
+            "name": 1,
+            "friend_code": 1,
+            "coins": 1,
+            "created_at": 1,
+            "updated_at": 1,
+            "user_id": 1,
+            "completed_count": {"$size": {"$ifNull": [{"$objectToArray": "$completed"}, []]}},
+            "stars": {
+                "$sum": {
+                    "$map": {
+                        "input": {"$ifNull": [{"$objectToArray": "$completed"}, []]},
+                        "as": "e",
+                        "in": {"$ifNull": ["$$e.v.stars", 0]},
+                    }
+                }
+            },
+        }},
+        {"$sort": {"stars": -1, "completed_count": -1, "updated_at": -1}},
+        {"$limit": limit},
+    ]
+    docs = await db.profiles.aggregate(pipeline).to_list(limit)
+    out = []
+    for i, d in enumerate(docs, start=1):
+        out.append({
+            "rank": i,
+            "device_id": d.get("device_id"),
+            "name": d.get("name") or "Joueur",
+            "friend_code": d.get("friend_code"),
+            "stars": int(d.get("stars") or 0),
+            "completed": int(d.get("completed_count") or 0),
+            "coins": int(d.get("coins") or 0),
+            "has_account": bool(d.get("user_id")),
+            "updated_at": d.get("updated_at"),
+        })
+    return {"entries": out, "admin_name": admin.get("name")}
+
+
+@api_router.delete("/admin/profile/{device_id}")
+async def admin_delete_profile(
+    device_id: str,
+    admin: dict = Depends(_current_admin_dep),
+):
+    """Permanently remove a player profile. Also clears their friends from
+    other users' friend lists and detaches the linked user account (if any)
+    so the user can re-register from a fresh slate."""
+    target = await db.profiles.find_one({"device_id": device_id}, {"_id": 0})
+    if not target:
+        raise HTTPException(404, "Profil introuvable")
+    if target.get("user_id") == admin.get("user_id"):
+        raise HTTPException(400, "Impossible de supprimer son propre profil admin")
+
+    # Remove from peers' friend lists
+    code = target.get("friend_code")
+    if code:
+        await db.profiles.update_many(
+            {"friends": code},
+            {"$pull": {"friends": code}},
+        )
+    # Detach linked user account (don't delete the account, just unlink so
+    # next login creates a brand-new profile)
+    linked_user_id = target.get("user_id")
+    if linked_user_id:
+        await db.users.update_one(
+            {"user_id": linked_user_id},
+            {"$set": {"profile_device_id": None}},
+        )
+    await db.profiles.delete_one({"device_id": device_id})
+    await db.admin_audit.insert_one({
+        "actor_user_id": admin.get("user_id"),
+        "actor_username": admin.get("username"),
+        "action": "delete_profile",
+        "target_device_id": device_id,
+        "target_name": target.get("name"),
+        "at": datetime.now(timezone.utc).isoformat(),
+    })
+    return {"ok": True, "deleted": device_id}
+
+
+@api_router.patch("/admin/profile/{device_id}")
+async def admin_update_profile(
+    device_id: str,
+    payload: AdminUpdateProfileIn,
+    admin: dict = Depends(_current_admin_dep),
+):
+    """Edit a player's name and/or coin balance, optionally wipe progression."""
+    target = await db.profiles.find_one({"device_id": device_id}, {"_id": 0})
+    if not target:
+        raise HTTPException(404, "Profil introuvable")
+    patch: Dict[str, Any] = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    changes: Dict[str, Any] = {}
+    if payload.name is not None:
+        name = payload.name.strip()[:24]
+        if not name:
+            raise HTTPException(400, "Nom requis")
+        patch["name"] = name
+        changes["name"] = {"from": target.get("name"), "to": name}
+    if payload.coins is not None:
+        coins = max(0, int(payload.coins))
+        patch["coins"] = coins
+        changes["coins"] = {"from": int(target.get("coins") or 0), "to": coins}
+    if payload.reset_progress:
+        patch["completed"] = {}
+        changes["completed"] = "reset"
+    if not changes:
+        raise HTTPException(400, "Aucune modification fournie")
+    await db.profiles.update_one({"device_id": device_id}, {"$set": patch})
+    await db.admin_audit.insert_one({
+        "actor_user_id": admin.get("user_id"),
+        "actor_username": admin.get("username"),
+        "action": "update_profile",
+        "target_device_id": device_id,
+        "changes": changes,
+        "at": datetime.now(timezone.utc).isoformat(),
+    })
+    updated = await db.profiles.find_one({"device_id": device_id}, {"_id": 0})
+    return {"ok": True, "profile": updated, "changes": changes}
+
+
+@api_router.get("/admin/audit")
+async def admin_audit_log(
+    limit: int = 50,
+    admin: dict = Depends(_current_admin_dep),
+):
+    """Last N admin actions for transparency."""
+    limit = max(1, min(limit, 200))
+    docs = await db.admin_audit.find({}, {"_id": 0}).sort("at", -1).to_list(limit)
+    return {"entries": docs}
+
+
 # Include the routers
 api_router.include_router(make_auth_router(db, _get_or_create_profile))
 app.include_router(api_router)
@@ -834,6 +990,7 @@ async def warmup():
     import asyncio
 
     await ensure_auth_indexes(db)
+    await seed_admin_user(db)
 
     async def _gen():
         loop = asyncio.get_event_loop()
