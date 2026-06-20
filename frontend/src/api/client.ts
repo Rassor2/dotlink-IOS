@@ -1,6 +1,6 @@
 import { storage } from '@/src/utils/storage';
 
-const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
+const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || "https://dotlink-ios.onrender.com";
 const API = `${BACKEND_URL}/api`;
 
 const DEVICE_KEY = 'dotlink_device_id';
