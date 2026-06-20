@@ -226,4 +226,37 @@ export const api = {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
     }),
+  // ---- Admin (RBAC, all require admin Bearer token) ----
+  authAdminLogin: (username: string, password: string) =>
+    req<AuthResponse>('/auth/admin/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+  adminLeaderboard: (token: string, search?: string, limit = 200) =>
+    req<{ entries: AdminEntry[]; admin_name?: string }>(
+      `/admin/leaderboard?limit=${limit}${search ? `&search=${encodeURIComponent(search)}` : ''}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    ),
+  adminDeleteProfile: (token: string, device_id: string) =>
+    req<{ ok: boolean; deleted: string }>(`/admin/profile/${encodeURIComponent(device_id)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    }),
+  adminUpdateProfile: (
+    token: string,
+    device_id: string,
+    patch: { name?: string; coins?: number; reset_progress?: boolean },
+  ) =>
+    req<{ ok: boolean; profile: any; changes: any }>(
+      `/admin/profile/${encodeURIComponent(device_id)}`,
+      {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify(patch),
+      },
+    ),
+  adminAudit: (token: string, limit = 50) =>
+    req<{ entries: any[] }>(`/admin/audit?limit=${limit}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    }),
 };

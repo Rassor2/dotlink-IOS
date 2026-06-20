@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity,
-  ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView,
+  ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, Modal,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -14,13 +14,27 @@ import { hapticLight, hapticSuccess, hapticError } from '@/src/audio/feedback';
 
 export default function AuthScreen() {
   const router = useRouter();
-  const { user, register, login, loginWithGoogle, logout } = useAuth();
+  const { user, register, login, loginWithGoogle, loginAsAdmin, logout } = useAuth();
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+
+  // Admin login modal state
+  const [adminOpen, setAdminOpen] = useState(false);
+  const [adminUser, setAdminUser] = useState('');
+  const [adminPass, setAdminPass] = useState('');
+  const [adminBusy, setAdminBusy] = useState(false);
+  const [adminError, setAdminError] = useState('');
+
+  // Auto-redirect admins to the moderation screen.
+  useEffect(() => {
+    if (user?.is_admin) {
+      router.replace('/admin');
+    }
+  }, [user, router]);
 
   const submit = async () => {
     setError('');
@@ -43,6 +57,28 @@ export default function AuthScreen() {
       else setError('Connexion impossible. Réessaie.');
     } finally {
       setBusy(false);
+    }
+  };
+
+  const submitAdmin = async () => {
+    setAdminError('');
+    if (!adminUser.trim() || !adminPass) {
+      setAdminError('Identifiants requis');
+      return;
+    }
+    setAdminBusy(true);
+    try {
+      await loginAsAdmin(adminUser.trim(), adminPass);
+      hapticSuccess();
+      setAdminOpen(false);
+      setAdminUser('');
+      setAdminPass('');
+      router.replace('/admin');
+    } catch (e: any) {
+      hapticError();
+      setAdminError('Identifiants admin incorrects');
+    } finally {
+      setAdminBusy(false);
     }
   };
 
@@ -172,8 +208,69 @@ export default function AuthScreen() {
             Apple et Facebook arrivent bientôt (build natif requis).{'\n'}
             Ta progression actuelle sera fusionnée avec ton compte.
           </Text>
+
+          <TouchableOpacity
+            testID="auth-admin-link"
+            style={styles.adminLink}
+            onPress={() => { hapticLight(); setAdminOpen(true); setAdminError(''); }}
+          >
+            <Ionicons name="shield-checkmark-outline" size={12} color={colors.onSurfaceTertiary} />
+            <Text style={styles.adminLinkLabel}>Accès modérateur</Text>
+          </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      <Modal visible={adminOpen} transparent animationType="fade" onRequestClose={() => setAdminOpen(false)}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.adminScrim}>
+          <View style={styles.adminCard} testID="auth-admin-modal">
+            <View style={styles.adminHeader}>
+              <Ionicons name="shield-checkmark" size={22} color="#ff6b6b" />
+              <Text style={styles.adminTitle}>Connexion modérateur</Text>
+            </View>
+            <Text style={styles.adminSub}>
+              Réservé aux administrateurs. Tentatives journalisées.
+            </Text>
+            <TextInput
+              testID="auth-admin-user"
+              style={styles.input}
+              placeholder="Identifiant"
+              placeholderTextColor={colors.onSurfaceTertiary}
+              value={adminUser}
+              onChangeText={setAdminUser}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <TextInput
+              testID="auth-admin-pass"
+              style={styles.input}
+              placeholder="Mot de passe"
+              placeholderTextColor={colors.onSurfaceTertiary}
+              value={adminPass}
+              onChangeText={setAdminPass}
+              secureTextEntry
+            />
+            {adminError ? <Text style={styles.error}>{adminError}</Text> : null}
+            <View style={styles.adminRow}>
+              <TouchableOpacity
+                style={styles.adminSecondary}
+                onPress={() => { setAdminOpen(false); setAdminUser(''); setAdminPass(''); setAdminError(''); }}
+              >
+                <Text style={styles.adminSecondaryLabel}>Annuler</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="auth-admin-submit"
+                style={styles.adminPrimary}
+                onPress={submitAdmin}
+                disabled={adminBusy}
+              >
+                {adminBusy ? <ActivityIndicator color="#fff" size="small" /> : (
+                  <Text style={styles.adminPrimaryLabel}>Entrer</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 }
@@ -252,4 +349,44 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)',
   },
   logoutLabel: { color: colors.onSurface, fontSize: 13, fontWeight: '600' },
+
+  adminLink: {
+    alignSelf: 'center', marginTop: spacing.md,
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingVertical: 8, paddingHorizontal: 12,
+    opacity: 0.55,
+  },
+  adminLinkLabel: {
+    color: colors.onSurfaceTertiary, fontSize: 11,
+    letterSpacing: 0.4, textDecorationLine: 'underline',
+  },
+
+  adminScrim: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.78)',
+    alignItems: 'center', justifyContent: 'center', padding: spacing.lg,
+  },
+  adminCard: {
+    width: '100%', maxWidth: 380,
+    backgroundColor: 'rgba(15,15,15,0.98)',
+    borderRadius: radii.lg,
+    borderWidth: 1, borderColor: 'rgba(255,107,107,0.35)',
+    padding: spacing.lg, gap: 10,
+  },
+  adminHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  adminTitle: { color: colors.onSurface, fontSize: 16, fontWeight: '700' },
+  adminSub: { color: colors.onSurfaceTertiary, fontSize: 11, marginBottom: 6 },
+  adminRow: { flexDirection: 'row', gap: 10, marginTop: 6 },
+  adminSecondary: {
+    flex: 1, paddingVertical: 12, alignItems: 'center',
+    borderRadius: radii.md,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)',
+  },
+  adminSecondaryLabel: { color: colors.onSurface, fontSize: 13, fontWeight: '600' },
+  adminPrimary: {
+    flex: 1, paddingVertical: 12, alignItems: 'center',
+    borderRadius: radii.md,
+    backgroundColor: '#ff6b6b',
+  },
+  adminPrimaryLabel: { color: '#fff', fontSize: 13, fontWeight: '700' },
 });

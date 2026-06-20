@@ -14,10 +14,12 @@ const AUTH_BASE = 'https://auth.emergentagent.com/';
 
 type Ctx = {
   user: AuthUser | null;
+  token: string | null;
   authLoading: boolean;
   register: (email: string, password: string, name?: string) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   loginWithGoogle: () => Promise<void>;
+  loginAsAdmin: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
 };
 
@@ -30,12 +32,16 @@ function parseSessionId(url: string): string | null {
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
+  const [token, setToken] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const { refresh } = useProfile();
 
   const applyAuth = useCallback(async (res: AuthResponse) => {
     await storage.secureSet(TOKEN_KEY, res.session_token);
+    setToken(res.session_token);
     setUser(res.user);
+    // Admin accounts have no game profile attached — skip profile merge.
+    if (res.user.is_admin) return;
     const canonical = res.user.profile_device_id;
     if (canonical) {
       const current = await getDeviceId();
@@ -70,11 +76,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             return;
           }
         }
-        const token = await storage.secureGet<string>(TOKEN_KEY, '');
-        if (token) {
+        const stored = await storage.secureGet<string>(TOKEN_KEY, '');
+        if (stored) {
           try {
-            const me = await api.authMe(token);
+            const me = await api.authMe(stored);
             setUser(me.user);
+            setToken(stored);
           } catch {
             await storage.secureRemove(TOKEN_KEY);
           }
@@ -117,17 +124,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [handleSessionId]);
 
+  const loginAsAdmin = useCallback(async (username: string, password: string) => {
+    const res = await api.authAdminLogin(username, password);
+    await applyAuth(res);
+  }, [applyAuth]);
+
   const logout = useCallback(async () => {
-    const token = await storage.secureGet<string>(TOKEN_KEY, '');
-    if (token) {
-      try { await api.authLogout(token); } catch {}
+    const stored = await storage.secureGet<string>(TOKEN_KEY, '');
+    if (stored) {
+      try { await api.authLogout(stored); } catch {}
     }
     await storage.secureRemove(TOKEN_KEY);
     setUser(null);
+    setToken(null);
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, authLoading, register, login, loginWithGoogle, logout }}>
+    <AuthContext.Provider value={{ user, token, authLoading, register, login, loginWithGoogle, loginAsAdmin, logout }}>
       {children}
     </AuthContext.Provider>
   );
