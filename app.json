@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "f3d86085-0e8e-4526-a7b0-642d8db0929c"
+      }
+    },
+    "android": {
+      "package": "dotlink.on.space"
+    }
+  }
+}
